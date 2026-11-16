@@ -118,6 +118,16 @@ class CoversucheApp:
         links.rowconfigure(0, weight=1)
         links.columnconfigure(0, weight=1)
         self.liste.bind("<<TreeviewSelect>>", self._auswahl_geaendert)
+        # Rechtsklick öffnet das Kontextmenü (Button-3 = rechte Maustaste)
+        self.liste.bind("<Button-3>", self._kontextmenue_zeigen)
+        self.kontextmenue = tk.Menu(self.fenster, tearoff=False)
+        self.kontextmenue.add_command(label="Cover entfernen",
+                                      command=self._cover_entfernen)
+        self.kontextmenue.add_command(label="Cover manuell hinzufügen …",
+                                      command=self._cover_hinzufuegen)
+        self.kontextmenue.add_separator()
+        self.kontextmenue.add_command(label="ID3-Tag bearbeiten …",
+                                      command=self._tag_bearbeiten)
         mitte.add(links, weight=3)
 
         rechts = ttk.Frame(mitte, padding=(12, 0, 0, 0))
@@ -303,6 +313,109 @@ class CoversucheApp:
             self.statuszeile.set(f"Fertig. {text}  –  Log: {self.log_pfad}")
 
     # ------------------------------------------------------------------
+    # Kontextmenü (Rechtsklick auf eine Datei)
+    # ------------------------------------------------------------------
+    def _kontextmenue_zeigen(self, event) -> None:
+        zeile = self.liste.identify_row(event.y)
+        if not zeile:
+            return
+        # Die angeklickte Zeile auswählen, damit klar ist, worum es geht
+        self.liste.selection_set(zeile)
+        self.liste.focus(zeile)
+        if self.arbeitet:
+            # Während der automatischen Suche nichts von Hand ändern
+            self.statuszeile.set("Bitte warten, bis der laufende Vorgang "
+                                 "fertig ist (oder Stopp drücken).")
+            return
+        try:
+            hat_cover = core.hat_cover(self.dateien[int(zeile)])
+        except Exception:
+            hat_cover = False
+        # Eintrag 0 = "Cover entfernen" – nur anklickbar, wenn es ein Cover gibt
+        self.kontextmenue.entryconfigure(
+            0, state="normal" if hat_cover else "disabled")
+        try:
+            self.kontextmenue.tk_popup(event.x_root, event.y_root)
+        finally:
+            self.kontextmenue.grab_release()
+
+    def _ausgewaehlt(self) -> tuple[str, Path] | None:
+        auswahl = self.liste.selection()
+        if not auswahl:
+            return None
+        return auswahl[0], self.dateien[int(auswahl[0])]
+
+    def _status_neu_setzen(self, iid: str, datei: Path) -> None:
+        """Status der Zeile und Vorschau nach einer manuellen Änderung aktualisieren."""
+        try:
+            status = (core.STATUS_VORHANDEN if core.hat_cover(datei)
+                      else core.STATUS_FEHLT)
+        except Exception:
+            status = core.STATUS_FEHLER
+        self.liste.set(iid, "status", status)
+        self.liste.item(iid, tags=(status,))
+        self._auswahl_geaendert()
+
+    def _cover_entfernen(self) -> None:
+        gewaehlt = self._ausgewaehlt()
+        if not gewaehlt:
+            return
+        iid, datei = gewaehlt
+        if not messagebox.askyesno(
+                "Cover entfernen",
+                f"Soll das Cover wirklich aus dieser Datei entfernt werden?\n\n"
+                f"{datei.name}"):
+            return
+        try:
+            core.entferne_cover(datei)
+        except Exception as fehler:
+            messagebox.showerror("Coversuche",
+                                 f"Cover konnte nicht entfernt werden:\n{fehler}")
+            return
+        self._status_neu_setzen(iid, datei)
+        self.statuszeile.set(f"Cover entfernt: {datei.name}")
+
+    def _cover_hinzufuegen(self) -> None:
+        gewaehlt = self._ausgewaehlt()
+        if not gewaehlt:
+            return
+        iid, datei = gewaehlt
+        bildpfad = filedialog.askopenfilename(
+            title=f"Cover für „{datei.name}“ wählen",
+            initialdir=str(datei.parent),
+            filetypes=[("JPEG-Bilder", "*.jpg *.jpeg"),
+                       ("Andere Bilder", "*.png *.bmp *.gif *.webp"),
+                       ("Alle Dateien", "*.*")])
+        if not bildpfad:
+            return  # Dialog abgebrochen
+        try:
+            core.cover_aus_bilddatei(datei, bildpfad)
+        except Exception as fehler:
+            messagebox.showerror("Coversuche",
+                                 f"Cover konnte nicht hinzugefügt werden:\n{fehler}")
+            return
+        self._status_neu_setzen(iid, datei)
+        self.statuszeile.set(f"Cover hinzugefügt: {datei.name}")
+
+    def _tag_bearbeiten(self) -> None:
+        gewaehlt = self._ausgewaehlt()
+        if not gewaehlt:
+            return
+        iid, datei = gewaehlt
+        try:
+            werte = core.lese_tag_felder(datei)
+        except Exception as fehler:
+            messagebox.showerror("Coversuche",
+                                 f"ID3-Tag konnte nicht gelesen werden:\n{fehler}")
+            return
+        TagDialog(self.fenster, datei, werte,
+                  beim_speichern=lambda: self._nach_tag_speichern(iid, datei))
+
+    def _nach_tag_speichern(self, iid: str, datei: Path) -> None:
+        self._status_neu_setzen(iid, datei)
+        self.statuszeile.set(f"ID3-Tag gespeichert: {datei.name}")
+
+    # ------------------------------------------------------------------
     # Cover-Vorschau
     # ------------------------------------------------------------------
     def _auswahl_geaendert(self, _event=None) -> None:
@@ -334,6 +447,66 @@ class CoversucheApp:
         self.vorschau.configure(image="", text="Kein Cover vorhanden"
                                 if info else "Keine Datei ausgewählt")
         self.vorschau_info.configure(text=info)
+
+
+class TagDialog(tk.Toplevel):
+    """Eigenes kleines Fenster zum Bearbeiten des ID3-Tags einer Datei."""
+
+    def __init__(self, eltern: tk.Tk, datei: Path, werte: dict[str, str],
+                 beim_speichern):
+        super().__init__(eltern)
+        self.datei = datei
+        self.beim_speichern = beim_speichern
+        self.title(f"ID3-Tag bearbeiten – {datei.name}")
+        self.resizable(True, False)
+        self.transient(eltern)  # bleibt vor dem Hauptfenster
+
+        rahmen = ttk.Frame(self, padding=12)
+        rahmen.pack(fill="both", expand=True)
+        ttk.Label(rahmen, text=str(datei), foreground="#555",
+                  wraplength=460).grid(row=0, column=0, columnspan=2,
+                                       sticky="w", pady=(0, 10))
+
+        self.felder: dict[str, tk.StringVar] = {}
+        erstes_feld = None
+        for zeile, (name, kennung) in enumerate(core.TAG_FELDER, start=1):
+            ttk.Label(rahmen, text=name + ":").grid(row=zeile, column=0,
+                                                    sticky="w", pady=2)
+            variable = tk.StringVar(value=werte.get(kennung, ""))
+            eingabe = ttk.Entry(rahmen, textvariable=variable, width=50)
+            eingabe.grid(row=zeile, column=1, sticky="ew", padx=(8, 0), pady=2)
+            self.felder[kennung] = variable
+            erstes_feld = erstes_feld or eingabe
+        rahmen.columnconfigure(1, weight=1)
+
+        knoepfe = ttk.Frame(rahmen)
+        knoepfe.grid(row=len(core.TAG_FELDER) + 1, column=0, columnspan=2,
+                     sticky="e", pady=(12, 0))
+        ttk.Button(knoepfe, text="Speichern",
+                   command=self._speichern).pack(side="left", padx=(0, 6))
+        ttk.Button(knoepfe, text="Abbrechen",
+                   command=self.destroy).pack(side="left")
+
+        # Enter = Speichern, Escape = Abbrechen
+        self.bind("<Return>", lambda _e: self._speichern())
+        self.bind("<Escape>", lambda _e: self.destroy())
+
+        # "modal": solange dieses Fenster offen ist, ist das Hauptfenster gesperrt
+        self.grab_set()
+        if erstes_feld is not None:
+            erstes_feld.focus_set()
+
+    def _speichern(self) -> None:
+        werte = {kennung: var.get() for kennung, var in self.felder.items()}
+        try:
+            core.schreibe_tag_felder(self.datei, werte)
+        except Exception as fehler:
+            messagebox.showerror("Coversuche",
+                                 f"ID3-Tag konnte nicht gespeichert werden:\n"
+                                 f"{fehler}", parent=self)
+            return
+        self.destroy()
+        self.beim_speichern()
 
 
 def main() -> None:

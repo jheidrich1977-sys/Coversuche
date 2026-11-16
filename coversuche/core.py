@@ -22,7 +22,7 @@ from datetime import datetime
 from pathlib import Path
 
 import requests
-from mutagen.id3 import APIC, ID3, ID3NoHeaderError
+from mutagen.id3 import APIC, COMM, ID3, Frames, ID3NoHeaderError
 from PIL import Image
 
 # Wie sich das Programm bei den Online-Diensten vorstellt.
@@ -108,6 +108,83 @@ def als_jpeg(bilddaten: bytes, max_groesse: int = 1000) -> bytes:
     puffer = io.BytesIO()
     bild.save(puffer, format="JPEG", quality=90)
     return puffer.getvalue()
+
+
+def entferne_cover(datei: Path) -> bool:
+    """Löscht alle Bilder aus dem ID3-Tag. True, wenn etwas gelöscht wurde."""
+    tags = lade_tags(datei)
+    if tags is None or not tags.getall("APIC"):
+        return False
+    tags.delall("APIC")
+    tags.save(datei, v2_version=3)
+    return True
+
+
+def cover_aus_bilddatei(datei: Path, bildpfad: str | Path) -> None:
+    """Liest ein Bild von der Festplatte und schreibt es als Cover in die MP3."""
+    bilddaten = Path(bildpfad).read_bytes()
+    schreibe_cover(datei, als_jpeg(bilddaten))
+
+
+# --- ID3-Tag bearbeiten ----------------------------------------------------
+
+# Die Felder, die man im Bearbeiten-Fenster sieht: (Anzeigename, ID3-Kennung)
+TAG_FELDER = [
+    ("Titel", "TIT2"),
+    ("Interpret", "TPE1"),
+    ("Album", "TALB"),
+    ("Album-Interpret", "TPE2"),
+    ("Jahr", "TDRC"),
+    ("Titelnummer", "TRCK"),
+    ("CD-Nummer", "TPOS"),
+    ("Genre", "TCON"),
+    ("Komponist", "TCOM"),
+    ("Kommentar", "COMM"),
+]
+
+
+def _kommentar_schluessel(tags: ID3) -> list[str]:
+    """Die "normalen" Kommentare (ohne Beschreibung), nicht die von iTunes & Co."""
+    return [k for k in tags.keys()
+            if k.startswith("COMM") and tags[k].desc == ""]
+
+
+def lese_tag_felder(datei: Path) -> dict[str, str]:
+    """Liest alle Felder aus TAG_FELDER. Fehlende Felder sind leer."""
+    tags = lade_tags(datei)
+    werte = {kennung: "" for _, kennung in TAG_FELDER}
+    if tags is None:
+        return werte
+    for _, kennung in TAG_FELDER:
+        if kennung == "COMM":
+            schluessel = _kommentar_schluessel(tags)
+            if schluessel:
+                werte["COMM"] = str(tags[schluessel[0]])
+        elif kennung in tags:
+            werte[kennung] = str(tags[kennung])
+    return werte
+
+
+def schreibe_tag_felder(datei: Path, werte: dict[str, str]) -> None:
+    """
+    Schreibt die Felder in den ID3-Tag. Ein leeres Feld wird gelöscht.
+    Alles andere im Tag (z. B. das Cover) bleibt unverändert.
+    """
+    tags = lade_tags(datei) or ID3()
+    for kennung, wert in werte.items():
+        wert = wert.strip()
+        if kennung == "COMM":
+            sprache = "eng"
+            for schluessel in _kommentar_schluessel(tags):
+                sprache = tags[schluessel].lang or sprache
+                del tags[schluessel]
+            if wert:
+                tags.add(COMM(encoding=3, lang=sprache, desc="", text=wert))
+            continue
+        tags.delall(kennung)
+        if wert:
+            tags.add(Frames[kennung](encoding=3, text=wert))
+    tags.save(datei, v2_version=3)
 
 
 # ---------------------------------------------------------------------------

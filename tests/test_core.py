@@ -90,3 +90,48 @@ def test_logbuch(tmp_path):
     text = log.pfad.read_text(encoding="utf-8-sig")
     assert "Cover ergänzt" in text and "a.mp3" in text
     assert "Cover schon vorhanden: 1" in text
+
+
+def test_cover_entfernen(tmp_path):
+    datei = mp3(tmp_path / "lied.mp3", "Queen", "Bohemian Rhapsody")
+    assert core.entferne_cover(datei) is False  # nichts zu entfernen
+    core.schreibe_cover(datei, core.als_jpeg(bild()))
+    assert core.entferne_cover(datei) is True
+    assert not core.hat_cover(datei)
+    assert core.lese_kuenstler_titel(datei) == ("Queen", "Bohemian Rhapsody")
+
+
+def test_cover_aus_bilddatei(tmp_path):
+    datei = mp3(tmp_path / "lied.mp3")
+    jpg = tmp_path / "cover.jpg"
+    jpg.write_bytes(bild("green", "JPEG"))
+    core.cover_aus_bilddatei(datei, jpg)
+    assert core.hat_cover(datei)
+
+
+def test_tag_felder_lesen_und_schreiben(tmp_path):
+    datei = mp3(tmp_path / "lied.mp3", "Queen", "Bohemian Rhapsody")
+    core.schreibe_cover(datei, core.als_jpeg(bild()))
+    werte = core.lese_tag_felder(datei)
+    assert werte["TPE1"] == "Queen" and werte["TALB"] == ""
+
+    werte.update({"TALB": "A Night at the Opera", "TDRC": "1975",
+                  "TRCK": "11", "TCON": "Rock", "COMM": "Klassiker",
+                  "TPE1": ""})  # leeres Feld = löschen
+    core.schreibe_tag_felder(datei, werte)
+
+    neu = core.lese_tag_felder(datei)
+    assert neu["TALB"] == "A Night at the Opera"
+    assert neu["TDRC"] == "1975"
+    assert neu["TRCK"] == "11"
+    assert neu["TCON"] == "Rock"
+    assert neu["COMM"] == "Klassiker"
+    assert neu["TPE1"] == ""
+    assert core.hat_cover(datei)  # Cover bleibt erhalten
+
+
+def test_tag_felder_bei_datei_ohne_tag(tmp_path):
+    datei = mp3(tmp_path / "leer.mp3")
+    assert all(w == "" for w in core.lese_tag_felder(datei).values())
+    core.schreibe_tag_felder(datei, {"TIT2": "Neu"})
+    assert core.lese_tag_felder(datei)["TIT2"] == "Neu"

@@ -15,6 +15,12 @@ diese automatisch aus dem Internet ergänzt.
    (`Coversuche_Log_<Datum>_<Uhrzeit>.txt` im gewählten Ordner):
    *Cover schon vorhanden*, *Cover ergänzt*, *Kein Cover gefunden* oder *Fehler*.
 
+5. **Rechtsklick auf eine Datei** in der Liste öffnet ein Menü:
+   * **Cover entfernen** – löscht das Cover aus dem ID3-Tag (mit Rückfrage)
+   * **Cover manuell hinzufügen …** – ein eigenes Bild (JPG) auswählen
+   * **ID3-Tag bearbeiten …** – Titel, Interpret, Album, Jahr, Genre usw. ändern
+     (ein leer gelassenes Feld wird gelöscht)
+
 **Tipp:** Die Suche klappt am besten bei Dateinamen wie
 `Künstler - Titel.mp3`. Tracknummern, „(Official Video)“, „[HQ]“ und Ähnliches
 werden automatisch entfernt. Bringt der Dateiname nichts, wird zusätzlich mit
