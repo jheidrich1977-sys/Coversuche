@@ -135,3 +135,36 @@ def test_tag_felder_bei_datei_ohne_tag(tmp_path):
     assert all(w == "" for w in core.lese_tag_felder(datei).values())
     core.schreibe_tag_felder(datei, {"TIT2": "Neu"})
     assert core.lese_tag_felder(datei)["TIT2"] == "Neu"
+
+
+def groesse(jpeg: bytes) -> tuple[int, int]:
+    return Image.open(io.BytesIO(jpeg)).size
+
+
+def test_kleines_cover_wird_hochskaliert():
+    klein = io.BytesIO()
+    Image.new("RGB", (200, 100), "red").save(klein, format="JPEG")
+    assert groesse(core.als_jpeg(klein.getvalue())) == (600, 300)  # Verhältnis bleibt
+
+
+def test_grosses_cover_wird_verkleinert_passendes_bleibt():
+    gross, passend = io.BytesIO(), io.BytesIO()
+    Image.new("RGB", (3000, 3000)).save(gross, format="PNG")
+    Image.new("RGB", (800, 800)).save(passend, format="PNG")
+    assert groesse(core.als_jpeg(gross.getvalue())) == (1000, 1000)
+    assert groesse(core.als_jpeg(passend.getvalue())) == (800, 800)
+
+
+def test_manuelles_cover_wird_hochskaliert(tmp_path):
+    datei = mp3(tmp_path / "lied.mp3")
+    jpg = tmp_path / "klein.jpg"
+    jpg.write_bytes(bild("green", "JPEG"))  # 50 × 50 Pixel
+    core.cover_aus_bilddatei(datei, jpg)
+    assert groesse(core.lese_cover(datei)) == (600, 600)
+
+
+def test_einstellungen_merken(tmp_path, monkeypatch):
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    assert core.lade_einstellungen() == {}
+    core.speichere_einstellung("letzter_cover_ordner", r"C:\Bilder\Cover")
+    assert core.lade_einstellungen()["letzter_cover_ordner"] == r"C:\Bilder\Cover"

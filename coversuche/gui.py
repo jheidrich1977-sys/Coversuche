@@ -382,12 +382,15 @@ class CoversucheApp:
         iid, datei = gewaehlt
         bildpfad = filedialog.askopenfilename(
             title=f"Cover für „{datei.name}“ wählen",
-            initialdir=str(datei.parent),
+            initialdir=self._start_ordner_fuer_cover(datei),
             filetypes=[("JPEG-Bilder", "*.jpg *.jpeg"),
                        ("Andere Bilder", "*.png *.bmp *.gif *.webp"),
                        ("Alle Dateien", "*.*")])
         if not bildpfad:
             return  # Dialog abgebrochen
+        # Ordner merken – auch für den nächsten Programmstart
+        core.speichere_einstellung("letzter_cover_ordner",
+                                   os.path.dirname(bildpfad))
         try:
             core.cover_aus_bilddatei(datei, bildpfad)
         except Exception as fehler:
@@ -396,6 +399,14 @@ class CoversucheApp:
             return
         self._status_neu_setzen(iid, datei)
         self.statuszeile.set(f"Cover hinzugefügt: {datei.name}")
+
+    @staticmethod
+    def _start_ordner_fuer_cover(datei: Path) -> str:
+        """Zuletzt benutzter Cover-Ordner – falls es ihn noch gibt –, sonst der MP3-Ordner."""
+        letzter = core.lade_einstellungen().get("letzter_cover_ordner")
+        if letzter and os.path.isdir(letzter):
+            return letzter
+        return str(datei.parent)
 
     def _tag_bearbeiten(self) -> None:
         gewaehlt = self._ausgewaehlt()

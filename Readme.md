@@ -17,9 +17,13 @@ diese automatisch aus dem Internet ergänzt.
 
 5. **Rechtsklick auf eine Datei** in der Liste öffnet ein Menü:
    * **Cover entfernen** – löscht das Cover aus dem ID3-Tag (mit Rückfrage)
-   * **Cover manuell hinzufügen …** – ein eigenes Bild (JPG) auswählen
+   * **Cover manuell hinzufügen …** – ein eigenes Bild (JPG) auswählen; der Ordner
+     des letzten Covers wird gemerkt (auch nach einem Neustart)
    * **ID3-Tag bearbeiten …** – Titel, Interpret, Album, Jahr, Genre usw. ändern
      (ein leer gelassenes Feld wird gelöscht)
+
+**Cover-Größe:** Zu kleine Cover werden auf 600 Pixel vergrößert, sehr große
+auf 1000 Pixel verkleinert (Seitenverhältnis bleibt erhalten).
 
 **Tipp:** Die Suche klappt am besten bei Dateinamen wie
 `Künstler - Titel.mp3`. Tracknummern, „(Official Video)“, „[HQ]“ und Ähnliches

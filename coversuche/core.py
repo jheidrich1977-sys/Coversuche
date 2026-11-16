@@ -16,6 +16,8 @@ die Logik auch ohne Fenster testen.
 from __future__ import annotations
 
 import io
+import json
+import os
 import re
 from dataclasses import dataclass
 from datetime import datetime
@@ -100,11 +102,30 @@ def schreibe_cover(datei: Path, bilddaten: bytes) -> None:
     tags.save(datei, v2_version=3)
 
 
-def als_jpeg(bilddaten: bytes, max_groesse: int = 1000) -> bytes:
-    """Prüft, ob es wirklich ein Bild ist, und speichert es als JPEG."""
+# Cover-Größe in Pixeln (längere Seite): kleinere Bilder werden auf
+# MIN_GROESSE vergrößert, größere auf MAX_GROESSE verkleinert.
+MIN_GROESSE = 600
+MAX_GROESSE = 1000
+
+
+def als_jpeg(bilddaten: bytes, min_groesse: int = MIN_GROESSE,
+             max_groesse: int = MAX_GROESSE) -> bytes:
+    """
+    Prüft, ob es wirklich ein Bild ist, bringt es auf eine passende Größe
+    und speichert es als JPEG. Das Seitenverhältnis bleibt immer erhalten.
+    """
     bild = Image.open(io.BytesIO(bilddaten))
     bild = bild.convert("RGB")
-    bild.thumbnail((max_groesse, max_groesse))
+    laengste_seite = max(bild.size)
+    if laengste_seite < min_groesse:
+        # Zu klein → hochskalieren (LANCZOS ergibt das schärfste Ergebnis)
+        faktor = min_groesse / laengste_seite
+        neue_groesse = (max(1, round(bild.width * faktor)),
+                        max(1, round(bild.height * faktor)))
+        bild = bild.resize(neue_groesse, Image.Resampling.LANCZOS)
+    else:
+        # Zu groß → verkleinern (macht nichts, wenn es schon passt)
+        bild.thumbnail((max_groesse, max_groesse), Image.Resampling.LANCZOS)
     puffer = io.BytesIO()
     bild.save(puffer, format="JPEG", quality=90)
     return puffer.getvalue()
@@ -343,7 +364,36 @@ def bearbeite_datei(datei: Path,
 
 
 # ---------------------------------------------------------------------------
-# 6. Log-Datei
+# 6. Einstellungen merken (z. B. den zuletzt benutzten Cover-Ordner)
+# ---------------------------------------------------------------------------
+
+def einstellungs_datei() -> Path:
+    """Unter Windows: C:\\Users\\<Name>\\AppData\\Roaming\\Coversuche\\einstellungen.json"""
+    basis = os.environ.get("APPDATA") or Path.home()
+    return Path(basis) / "Coversuche" / "einstellungen.json"
+
+
+def lade_einstellungen() -> dict:
+    try:
+        return json.loads(einstellungs_datei().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}  # noch keine Datei oder kaputt → mit leeren Werten starten
+
+
+def speichere_einstellung(schluessel: str, wert) -> None:
+    einstellungen = lade_einstellungen()
+    einstellungen[schluessel] = wert
+    try:
+        pfad = einstellungs_datei()
+        pfad.parent.mkdir(parents=True, exist_ok=True)
+        pfad.write_text(json.dumps(einstellungen, indent=2, ensure_ascii=False),
+                        encoding="utf-8")
+    except OSError:
+        pass  # Merken ist nur Komfort – wenn es nicht klappt, ist das kein Drama
+
+
+# ---------------------------------------------------------------------------
+# 7. Log-Datei
 # ---------------------------------------------------------------------------
 
 class Logbuch:
