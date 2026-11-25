@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+build/
+dist/
+*.spec
+Coversuche_Log_*.txt

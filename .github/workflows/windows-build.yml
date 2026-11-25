@@ -1,0 +1,42 @@
+# Baut automatisch das Windows-Setup "Coversuche-Setup.exe".
+# Läuft bei jedem Hochladen (Push) und kann auf GitHub unter
+# "Actions" > "Windows-Programm bauen" > "Run workflow" auch per Hand gestartet werden.
+name: Windows-Programm bauen
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Bibliotheken installieren
+        run: |
+          pip install -r requirements.txt
+          pip install pyinstaller==6.16.0 pytest
+      - name: Tests ausfuehren
+        run: python -m pytest -q
+      - name: Programm bauen (Ordner dist\Coversuche)
+        # "onedir" statt einer einzelnen .exe: startet deutlich schneller,
+        # was beim Explorer-Kontextmenü wichtig ist.
+        run: pyinstaller --noconfirm --windowed --name Coversuche start.py
+      - name: Inno Setup bereitstellen
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress }
+          if (-not (Test-Path $iscc)) { throw "Inno Setup wurde nicht gefunden" }
+          "ISCC=$iscc" | Out-File -FilePath $env:GITHUB_ENV -Append
+      - name: Setup bauen (Coversuche-Setup.exe)
+        shell: pwsh
+        run: '& $env:ISCC "/DAppVersion=1.0.${{ github.run_number }}" installer\coversuche.iss'
+      - name: Setup zum Download bereitstellen
+        uses: actions/upload-artifact@v4
+        with:
+          name: Coversuche-Setup
+          path: dist/Coversuche-Setup.exe
