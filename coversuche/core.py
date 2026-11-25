@@ -423,3 +423,149 @@ class Logbuch:
         if abgebrochen:
             self._datei.write("  (Vorgang wurde vorzeitig abgebrochen)\n")
         self._datei.close()
+
+
+# ---------------------------------------------------------------------------
+# 8. Dateien und Ordner aus dem Explorer in eine MP3-Liste verwandeln
+# ---------------------------------------------------------------------------
+
+def sammle_mp3(pfade: list[str | Path], mit_unterordnern: bool = False) -> list[Path]:
+    """
+    Aus einer Mischung von Dateien und Ordnern (z. B. aus dem Explorer)
+    eine Liste aller MP3-Dateien machen – ohne doppelte Einträge.
+    """
+    ergebnis: dict[str, Path] = {}
+    for pfad in pfade:
+        pfad = Path(pfad)
+        if pfad.is_dir():
+            for datei in finde_mp3_dateien(pfad, mit_unterordnern):
+                ergebnis.setdefault(str(datei).lower(), datei)
+        elif pfad.is_file() and pfad.suffix.lower() == ".mp3":
+            ergebnis.setdefault(str(pfad).lower(), pfad)
+    return sorted(ergebnis.values(), key=lambda p: str(p).lower())
+
+
+# ---------------------------------------------------------------------------
+# 9. ID3-Tag mehrerer Dateien gleichzeitig bearbeiten
+# ---------------------------------------------------------------------------
+
+# Felder, die bei mehreren Dateien NICHT gemeinsam geändert werden dürfen,
+# weil sie für jedes Lied anders sind.
+NUR_EINZELN = {"TIT2", "TRCK"}
+
+
+def gemeinsame_tag_felder(dateien: list[Path]) -> dict[str, str | None]:
+    """
+    Für jedes Feld: der Wert, wenn er in ALLEN Dateien gleich ist,
+    sonst None (= "verschiedene Werte").
+    """
+    gemeinsam: dict[str, str | None] = {}
+    for nr, datei in enumerate(dateien):
+        werte = lese_tag_felder(datei)
+        for kennung, wert in werte.items():
+            if nr == 0:
+                gemeinsam[kennung] = wert
+            elif gemeinsam.get(kennung) != wert:
+                gemeinsam[kennung] = None
+    return gemeinsam
+
+
+# ---------------------------------------------------------------------------
+# 10. Dateinamen aus dem ID3-Tag bilden
+#     Schema: Interpret - Album - 01 - Titel.mp3
+# ---------------------------------------------------------------------------
+
+# Zeichen, die in Windows-Dateinamen verboten sind
+_VERBOTEN = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+
+
+def _sauber(text: str) -> str:
+    """Macht einen Text als Teil eines Dateinamens tauglich."""
+    text = _VERBOTEN.sub("_", text)
+    text = re.sub(r"\s+", " ", text)
+    return text.strip().rstrip(".")
+
+
+def tracknummer_zweistellig(track: str) -> str:
+    """ "3" → "03", "3/12" → "03", "12" → "12", "" → "" """
+    treffer = re.match(r"\s*(\d+)", track or "")
+    if not treffer:
+        return ""
+    return f"{int(treffer.group(1)):02d}"
+
+
+def neuer_dateiname(datei: Path) -> tuple[str | None, str]:
+    """
+    Liefert (neuer Name, Hinweis). Ist der neue Name None, kann die Datei
+    nicht umbenannt werden – der Hinweis sagt dann, warum.
+    Album und Tracknummer werden weggelassen, wenn sie im Tag fehlen.
+    """
+    werte = lese_tag_felder(datei)
+    interpret = _sauber(werte["TPE1"])
+    album = _sauber(werte["TALB"])
+    track = tracknummer_zweistellig(werte["TRCK"])
+    titel = _sauber(werte["TIT2"])
+
+    if not interpret or not titel:
+        fehlt = " und ".join(n for n, w in (("Interpret", interpret),
+                                            ("Titel", titel)) if not w)
+        return None, f"{fehlt} fehlt im ID3-Tag"
+
+    teile = [interpret, album, track, titel]
+    name = " - ".join(t for t in teile if t)
+    # Windows erlaubt höchstens 255 Zeichen pro Dateiname
+    name = name[:250 - len(".mp3")].rstrip(" .")
+    hinweis = ""
+    fehlend = [n for n, w in (("Album", album), ("Tracknummer", track)) if not w]
+    if fehlend:
+        hinweis = " und ".join(fehlend) + " fehlt – weggelassen"
+    return name + ".mp3", hinweis
+
+
+@dataclass
+class Umbenennung:
+    alt: Path
+    neu: Path | None   # None = wird nicht umbenannt
+    hinweis: str
+
+
+def plane_umbenennung(dateien: list[Path]) -> list[Umbenennung]:
+    """Berechnet für jede Datei den neuen Namen – ändert aber noch nichts."""
+    plan: list[Umbenennung] = []
+    vergeben: set[str] = set()
+    for datei in dateien:
+        try:
+            name, hinweis = neuer_dateiname(datei)
+        except Exception as fehler:
+            plan.append(Umbenennung(datei, None, f"Fehler: {fehler}"))
+            continue
+        if name is None:
+            plan.append(Umbenennung(datei, None, hinweis))
+            continue
+        ziel = datei.with_name(name)
+        schluessel = str(ziel).lower()  # Windows unterscheidet nicht Groß/klein
+        if ziel.name == datei.name:
+            plan.append(Umbenennung(datei, None, "Name ist schon richtig"))
+        elif schluessel in vergeben or (ziel.exists() and
+                                        str(ziel).lower() != str(datei).lower()):
+            plan.append(Umbenennung(datei, None,
+                                    f"„{name}“ gibt es schon"))
+        else:
+            vergeben.add(schluessel)
+            plan.append(Umbenennung(datei, ziel, hinweis))
+    return plan
+
+
+def fuehre_umbenennung_aus(plan: list[Umbenennung]) -> list[tuple[Umbenennung, str]]:
+    """Benennt um. Gibt pro Datei (Eintrag, Ergebnis-Text) zurück."""
+    ergebnisse = []
+    for eintrag in plan:
+        if eintrag.neu is None:
+            ergebnisse.append((eintrag, "übersprungen"))
+            continue
+        try:
+            eintrag.alt.rename(eintrag.neu)
+            ergebnisse.append((eintrag, "umbenannt"))
+        except OSError as fehler:
+            ergebnisse.append((eintrag, f"Fehler: {fehler}"))
+    return ergebnisse

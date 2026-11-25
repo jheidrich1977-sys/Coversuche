@@ -40,7 +40,13 @@ FARBEN = {
 
 
 class CoversucheApp:
-    def __init__(self, fenster: tk.Tk):
+    def __init__(self, fenster: tk.Tk, start_pfade: list[str] | None = None,
+                 sofort_ergaenzen: bool = False):
+        """
+        start_pfade: Dateien/Ordner, die gleich beim Start geladen werden
+                     (z. B. aus dem Explorer-Kontextmenü).
+        sofort_ergaenzen: nach dem Einlesen automatisch die Coversuche starten.
+        """
         self.fenster = fenster
         self.fenster.title("Coversuche – MP3-Cover finden und ergänzen")
         self.fenster.geometry("1100x650")
@@ -56,8 +62,27 @@ class CoversucheApp:
         self.arbeitet = False
         self._vorschau_bild = None  # muss gemerkt werden, sonst verschwindet es
 
+        self._sofort_ergaenzen = sofort_ergaenzen
+
         self._baue_oberflaeche()
         self.fenster.after(100, self._pruefe_nachrichten)
+        if start_pfade:
+            self.fenster.after(50, lambda: self._lade_start_pfade(start_pfade))
+
+    def _lade_start_pfade(self, pfade: list[str]) -> None:
+        """Lädt Dateien/Ordner, die beim Start übergeben wurden."""
+        if len(pfade) == 1 and os.path.isdir(pfade[0]):
+            # Ein Ordner: wie "Durchsuchen …", aber ohne Unterordner
+            self.ordner.set(os.path.normpath(pfade[0]))
+            self.unterordner.set(False)
+            self._starte_einlesen()
+            return
+        dateien = core.sammle_mp3(pfade)
+        if not dateien:
+            messagebox.showinfo("Coversuche", "Keine MP3-Dateien gefunden.")
+            return
+        self.ordner.set(str(dateien[0].parent))
+        self._starte_einlesen(dateien)
 
     # ------------------------------------------------------------------
     # Aufbau des Fensters
@@ -172,7 +197,8 @@ class CoversucheApp:
             return None
         return ordner
 
-    def _starte_einlesen(self) -> None:
+    def _starte_einlesen(self, feste_liste: list[Path] | None = None) -> None:
+        """Liest den Ordner ein – oder, falls angegeben, genau diese Dateien."""
         ordner = self._gueltiger_ordner()
         if ordner is None:
             return
@@ -182,7 +208,7 @@ class CoversucheApp:
         self._beschaeftigt(True)
         self.statuszeile.set("Lese Dateien ein …")
         threading.Thread(target=self._arbeit_einlesen,
-                         args=(ordner, self.unterordner.get()),
+                         args=(ordner, self.unterordner.get(), feste_liste),
                          daemon=True).start()
 
     def _starte_ergaenzen(self) -> None:
@@ -220,9 +246,11 @@ class CoversucheApp:
     # ------------------------------------------------------------------
     # Hintergrund-Arbeiten (laufen NICHT im Fenster-Thread!)
     # ------------------------------------------------------------------
-    def _arbeit_einlesen(self, ordner: Path, mit_unterordnern: bool) -> None:
+    def _arbeit_einlesen(self, ordner: Path, mit_unterordnern: bool,
+                         feste_liste: list[Path] | None = None) -> None:
         try:
-            dateien = core.finde_mp3_dateien(ordner, mit_unterordnern)
+            dateien = (feste_liste if feste_liste is not None
+                       else core.finde_mp3_dateien(ordner, mit_unterordnern))
         except OSError as fehler:
             self.nachrichten.put(("fehler", f"Ordner nicht lesbar: {fehler}"))
             self.nachrichten.put(("einlesen_fertig", 0))
@@ -301,6 +329,10 @@ class CoversucheApp:
                        if self.liste.set(i, "status") == core.STATUS_FEHLT)
             self.statuszeile.set(f"{len(self.dateien)} MP3-Dateien gefunden, "
                                  f"davon {ohne} ohne Cover.")
+            if self._sofort_ergaenzen:
+                self._sofort_ergaenzen = False  # nur beim ersten Mal
+                if ohne:
+                    self._starte_ergaenzen()
         elif art == "ergaenzen_fertig":
             self._beschaeftigt(False)
             zaehler: dict[str, int] = {}
@@ -461,37 +493,66 @@ class CoversucheApp:
 
 
 class TagDialog(tk.Toplevel):
-    """Eigenes kleines Fenster zum Bearbeiten des ID3-Tags einer Datei."""
+    """
+    Eigenes kleines Fenster zum Bearbeiten des ID3-Tags.
+    Bei mehreren Dateien werden nur die Felder geändert, die man anfasst.
+    """
 
-    def __init__(self, eltern: tk.Tk, datei: Path, werte: dict[str, str],
-                 beim_speichern):
+    def __init__(self, eltern: tk.Misc, dateien: Path | list[Path],
+                 werte: dict[str, str | None] | None = None,
+                 beim_speichern=None):
         super().__init__(eltern)
-        self.datei = datei
-        self.beim_speichern = beim_speichern
-        self.title(f"ID3-Tag bearbeiten – {datei.name}")
+        self.dateien = [dateien] if isinstance(dateien, Path) else list(dateien)
+        mehrere = len(self.dateien) > 1
+        if werte is None:
+            werte = (core.gemeinsame_tag_felder(self.dateien) if mehrere
+                     else core.lese_tag_felder(self.dateien[0]))
+        self.anfangswerte = werte
+        self.beim_speichern = beim_speichern or (lambda: None)
+
+        if mehrere:
+            self.title(f"ID3-Tag bearbeiten – {len(self.dateien)} Dateien")
+            kopf = (f"{len(self.dateien)} Dateien in {self.dateien[0].parent}\n"
+                    "Nur Felder, die du änderst, werden in alle Dateien "
+                    "geschrieben.")
+        else:
+            self.title(f"ID3-Tag bearbeiten – {self.dateien[0].name}")
+            kopf = str(self.dateien[0])
         self.resizable(True, False)
-        self.transient(eltern)  # bleibt vor dem Hauptfenster
+        if eltern.winfo_viewable():
+            self.transient(eltern)  # bleibt vor dem Hauptfenster
 
         rahmen = ttk.Frame(self, padding=12)
         rahmen.pack(fill="both", expand=True)
-        ttk.Label(rahmen, text=str(datei), foreground="#555",
-                  wraplength=460).grid(row=0, column=0, columnspan=2,
-                                       sticky="w", pady=(0, 10))
+        ttk.Label(rahmen, text=kopf, foreground="#555",
+                  wraplength=520, justify="left").grid(
+            row=0, column=0, columnspan=3, sticky="w", pady=(0, 10))
 
         self.felder: dict[str, tk.StringVar] = {}
         erstes_feld = None
         for zeile, (name, kennung) in enumerate(core.TAG_FELDER, start=1):
             ttk.Label(rahmen, text=name + ":").grid(row=zeile, column=0,
                                                     sticky="w", pady=2)
-            variable = tk.StringVar(value=werte.get(kennung, ""))
+            wert = werte.get(kennung)
+            variable = tk.StringVar(value=wert or "")
             eingabe = ttk.Entry(rahmen, textvariable=variable, width=50)
             eingabe.grid(row=zeile, column=1, sticky="ew", padx=(8, 0), pady=2)
+            hinweis = ""
+            if mehrere and kennung in core.NUR_EINZELN:
+                eingabe.configure(state="disabled")
+                hinweis = "nur einzeln änderbar"
+            elif wert is None:
+                hinweis = "verschiedene Werte"
+            if hinweis:
+                ttk.Label(rahmen, text=hinweis, foreground="#888").grid(
+                    row=zeile, column=2, sticky="w", padx=(6, 0))
             self.felder[kennung] = variable
-            erstes_feld = erstes_feld or eingabe
+            if erstes_feld is None and str(eingabe.cget("state")) != "disabled":
+                erstes_feld = eingabe
         rahmen.columnconfigure(1, weight=1)
 
         knoepfe = ttk.Frame(rahmen)
-        knoepfe.grid(row=len(core.TAG_FELDER) + 1, column=0, columnspan=2,
+        knoepfe.grid(row=len(core.TAG_FELDER) + 1, column=0, columnspan=3,
                      sticky="e", pady=(12, 0))
         ttk.Button(knoepfe, text="Speichern",
                    command=self._speichern).pack(side="left", padx=(0, 6))
@@ -504,30 +565,149 @@ class TagDialog(tk.Toplevel):
 
         # "modal": solange dieses Fenster offen ist, ist das Hauptfenster gesperrt
         self.grab_set()
+        self.lift()
+        self.focus_force()
         if erstes_feld is not None:
             erstes_feld.focus_set()
 
+    def _geaenderte_werte(self) -> dict[str, str]:
+        """Nur die Felder, die sich gegenüber dem Anfang geändert haben."""
+        geaendert = {}
+        for kennung, var in self.felder.items():
+            anfang = self.anfangswerte.get(kennung)
+            if var.get().strip() != (anfang or "").strip():
+                geaendert[kennung] = var.get()
+        return geaendert
+
     def _speichern(self) -> None:
-        werte = {kennung: var.get() for kennung, var in self.felder.items()}
-        try:
-            core.schreibe_tag_felder(self.datei, werte)
-        except Exception as fehler:
-            messagebox.showerror("Coversuche",
-                                 f"ID3-Tag konnte nicht gespeichert werden:\n"
-                                 f"{fehler}", parent=self)
+        werte = self._geaenderte_werte()
+        fehler_liste = []
+        if werte:
+            for datei in self.dateien:
+                try:
+                    core.schreibe_tag_felder(datei, werte)
+                except Exception as fehler:
+                    fehler_liste.append(f"{datei.name}: {fehler}")
+        if fehler_liste:
+            messagebox.showerror(
+                "Coversuche",
+                "ID3-Tag konnte nicht gespeichert werden:\n\n"
+                + "\n".join(fehler_liste[:15]), parent=self)
             return
         self.destroy()
         self.beim_speichern()
 
 
-def main() -> None:
+class UmbenennenDialog(tk.Toplevel):
+    """
+    Zeigt eine Vorschau "alter Name → neuer Name" und benennt erst nach
+    einem Klick auf "Umbenennen" wirklich um.
+    """
+
+    def __init__(self, eltern: tk.Misc, dateien: list[Path], beim_fertig=None):
+        super().__init__(eltern)
+        self.beim_fertig = beim_fertig or (lambda: None)
+        self.title(f"Dateien umbenennen – {len(dateien)} Datei(en)")
+        self.geometry("1000x500")
+        self.minsize(600, 300)
+        if eltern.winfo_viewable():
+            self.transient(eltern)
+
+        self.plan = core.plane_umbenennung(dateien)
+        anzahl = sum(1 for e in self.plan if e.neu is not None)
+
+        rahmen = ttk.Frame(self, padding=12)
+        rahmen.pack(fill="both", expand=True)
+        ttk.Label(rahmen, justify="left", text=(
+            "Neues Schema:  Interpret - Album - Tracknummer - Titel.mp3\n"
+            f"{anzahl} von {len(self.plan)} Dateien werden umbenannt. "
+            "Grau = wird übersprungen.")).pack(anchor="w", pady=(0, 8))
+
+        tabelle = ttk.Frame(rahmen)
+        tabelle.pack(fill="both", expand=True)
+        liste = ttk.Treeview(tabelle, columns=("alt", "neu", "hinweis"),
+                             show="headings")
+        for spalte, text, breite in (("alt", "Bisheriger Name", 340),
+                                     ("neu", "Neuer Name", 400),
+                                     ("hinweis", "Hinweis", 200)):
+            liste.heading(spalte, text=text)
+            liste.column(spalte, width=breite, anchor="w")
+        liste.tag_configure("aus", foreground="#999")
+        scroll = ttk.Scrollbar(tabelle, orient="vertical", command=liste.yview)
+        liste.configure(yscrollcommand=scroll.set)
+        liste.pack(side="left", fill="both", expand=True)
+        scroll.pack(side="right", fill="y")
+        for eintrag in self.plan:
+            liste.insert("", "end", values=(
+                eintrag.alt.name, eintrag.neu.name if eintrag.neu else "–",
+                eintrag.hinweis), tags=(() if eintrag.neu else ("aus",)))
+
+        knoepfe = ttk.Frame(rahmen)
+        knoepfe.pack(anchor="e", pady=(10, 0))
+        self.knopf_ok = ttk.Button(knoepfe, text="Umbenennen",
+                                   command=self._umbenennen,
+                                   state="normal" if anzahl else "disabled")
+        self.knopf_ok.pack(side="left", padx=(0, 6))
+        ttk.Button(knoepfe, text="Abbrechen",
+                   command=self.destroy).pack(side="left")
+        self.bind("<Escape>", lambda _e: self.destroy())
+        self.grab_set()
+        self.lift()
+        self.focus_force()
+
+    def _umbenennen(self) -> None:
+        ergebnisse = core.fuehre_umbenennung_aus(self.plan)
+        ok = sum(1 for _, text in ergebnisse if text == "umbenannt")
+        fehler = [f"{e.alt.name}: {text}" for e, text in ergebnisse
+                  if text.startswith("Fehler")]
+        meldung = f"{ok} Datei(en) umbenannt."
+        if fehler:
+            meldung += "\n\nProbleme:\n" + "\n".join(fehler[:15])
+            messagebox.showwarning("Coversuche", meldung, parent=self)
+        else:
+            messagebox.showinfo("Coversuche", meldung, parent=self)
+        self.destroy()
+        self.beim_fertig()
+
+
+def starte_aus_explorer(aktion: str, pfade: list[str]) -> None:
+    """Wird vom Explorer-Kontextmenü aufgerufen (siehe explorer.py)."""
     fenster = tk.Tk()
+    _design_waehlen()
+
+    if aktion == "cover":
+        CoversucheApp(fenster, pfade, sofort_ergaenzen=True)
+        fenster.mainloop()
+        return
+
+    # Für "tag" und "umbenennen" braucht es kein Hauptfenster
+    fenster.withdraw()
+    dateien = core.sammle_mp3(pfade)
+    if not dateien:
+        messagebox.showinfo("Coversuche", "Keine MP3-Dateien gefunden.")
+        fenster.destroy()
+        return
+    if aktion == "tag":
+        dialog = TagDialog(fenster, dateien)
+    else:
+        dialog = UmbenennenDialog(fenster, dateien)
+    # Wenn der Dialog geschlossen wird, ist das Programm fertig
+    dialog.bind("<Destroy>", lambda e: e.widget is dialog and fenster.destroy())
+    fenster.mainloop()
+
+
+def _design_waehlen() -> None:
     try:
         # Unter Windows sieht das moderne Design schöner aus
         ttk.Style().theme_use("vista")
     except tk.TclError:
         pass
-    CoversucheApp(fenster)
+
+
+def main(start_pfade: list[str] | None = None) -> None:
+    fenster = tk.Tk()
+    _design_waehlen()
+    CoversucheApp(fenster, start_pfade)
     fenster.mainloop()
 
 

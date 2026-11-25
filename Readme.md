@@ -33,29 +33,54 @@ Künstler und Titel aus dem ID3-Tag gesucht.
 **Hinweis:** Das Programm verändert deine MP3-Dateien. Probiere es zuerst an
 einem Ordner mit Kopien aus.
 
-## Programm herunterladen (ohne Programmierkenntnisse)
+## Explorer-Kontextmenü
 
-GitHub baut die `Coversuche.exe` automatisch bei jeder Änderung:
+Wenn beim Installieren das Häkchen „Explorer-Kontextmenü“ gesetzt war, gibt es
+nach einem Rechtsklick ein Untermenü **Coversuche**:
+
+| Rechtsklick auf … | Einträge |
+|---|---|
+| eine oder mehrere MP3-Dateien | Cover suchen · ID3-Tag bearbeiten · Dateinamen aus ID3-Tag erstellen |
+| einen Ordner | dasselbe für alle MP3s im Ordner (ohne Unterordner) |
+
+* **Cover suchen** öffnet das Hauptfenster mit diesen Dateien und startet die Suche sofort.
+* **ID3-Tag bearbeiten** bei mehreren Dateien: nur Felder, die du änderst, werden
+  in alle Dateien geschrieben. Titel und Tracknummer sind dann gesperrt.
+* **Dateinamen aus ID3-Tag erstellen** zeigt zuerst eine Vorschau. Schema:
+  `Interpret - Album - 01 - Titel.mp3` (Tracknummer immer zweistellig).
+  Fehlen Album oder Tracknummer, werden sie weggelassen; ohne Interpret oder
+  Titel wird die Datei übersprungen.
+
+**Windows 11:** Das Untermenü steht unter **„Weitere Optionen anzeigen“**
+(oder Rechtsklick mit gedrückter **Umschalttaste**). Ins neue, verkürzte Menü
+kommen nur Programme mit einer kostenpflichtigen digitalen Signatur.
+
+## Installieren (ohne Programmierkenntnisse)
+
+GitHub baut das Setup automatisch bei jeder Änderung:
 
 1. Auf GitHub im Repository oben auf **Actions** klicken.
 2. Den obersten Eintrag mit grünem Haken öffnen.
-3. Unten unter **Artifacts** auf **Coversuche-Windows** klicken. Du bekommst eine ZIP-Datei.
-4. ZIP entpacken und `Coversuche.exe` per Doppelklick starten.
+3. Unten unter **Artifacts** auf **Coversuche-Setup** klicken (ZIP-Datei).
+4. ZIP entpacken und `Coversuche-Setup.exe` per Doppelklick starten.
 
-Windows zeigt beim ersten Start eventuell „Der Computer wurde durch Windows
-geschützt“. Das liegt daran, dass das Programm nicht digital signiert ist.
-Klicke auf **Weitere Informationen** und dann auf **Trotzdem ausführen**.
+Windows zeigt eventuell „Der Computer wurde durch Windows geschützt“, weil das
+Setup nicht digital signiert ist: **Weitere Informationen** → **Trotzdem ausführen**.
+Administratorrechte sind nicht nötig. Deinstallieren geht über
+**Einstellungen → Apps → Installierte Apps → Coversuche**.
 
 ## Aufbau des Projekts (für Neugierige)
 
 | Datei | Inhalt |
 |---|---|
 | `coversuche/core.py` | Die Logik: Dateien finden, Cover lesen/schreiben, Online-Suche, Log |
-| `coversuche/gui.py` | Das Fenster (Dateiliste links, Vorschau rechts) |
+| `coversuche/gui.py` | Die Fenster (Hauptfenster, Tag-Bearbeitung, Umbenennen) |
+| `coversuche/explorer.py` | Start über das Explorer-Kontextmenü |
+| `installer/coversuche.iss` | Bauanleitung für das Setup (Inno Setup) |
 | `start.py` | Startet das Programm |
 | `tests/test_core.py` | Automatische Tests der Logik |
 | `requirements.txt` | Verwendete Zusatz-Bibliotheken |
-| `.github/workflows/windows-build.yml` | Anleitung für GitHub, die `.exe` zu bauen |
+| `.github/workflows/windows-build.yml` | Anleitung für GitHub, das Setup zu bauen |
 
 Geschrieben in **Python** mit den Bibliotheken *mutagen* (ID3-Tags),
 *Pillow* (Bilder), *requests* (Internet) und *tkinter* (Fenster).
